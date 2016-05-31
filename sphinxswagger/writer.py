@@ -1,4 +1,5 @@
 from docutils import nodes, writers
+import copy
 import json
 import os.path
 import re
@@ -6,22 +7,7 @@ import re
 from sphinx import addnodes
 
 
-_swagger_document = {
-    'swagger': '2.0',
-    'info': {},
-    'host': 'localhost:8000',
-    'basePath': '/',
-    'schemes': ['http'],
-    'consumes': [],
-    'produces': [],
-    'paths': {},
-    'definitions': {},
-    'parameters': {},
-    'responses': {},
-    'securityDefinitions': {},
-    'security': [],
-    'tags': [],
-}
+URI_TEMPLATE_RE = re.compile(r'\(\?P<([^>]*)>.*\)')
 
 
 def write_swagger_file(app, exception):
@@ -32,41 +18,28 @@ def write_swagger_file(app, exception):
     if exception is not None:
         return
 
-    maybe_empty = [name for name in _swagger_document.keys()
-                   if name not in ('swagger', 'info', 'paths')]
-    for k in maybe_empty:
-        if not _swagger_document[k]:
-            del _swagger_document[k]
-
-    _swagger_document['info'].setdefault('title', app.config.project)
-    _swagger_document['info'].setdefault('version', app.config.version)
-
     with open(os.path.join(app.outdir, 'swagger.json'), 'w') as f:
-        json.dump(_swagger_document, f, indent=2)
+        json.dump(app.builder.swagger.get_document(app.config), f, indent=2)
 
 
 class SwaggerWriter(writers.Writer):
 
     def __init__(self, *args, **kwargs):
+        self.swagger_document = kwargs.pop('swagger_document')
         writers.Writer.__init__(self, *args, **kwargs)
         self.translator_class = SwaggerTranslator
 
     def translate(self):
-        visitor = SwaggerTranslator(self.document)
+        visitor = SwaggerTranslator(self.document, self.swagger_document)
         self.document.walkabout(visitor)
 
 
 class SwaggerTranslator(nodes.NodeVisitor):
 
-    def __init__(self, document):
+    def __init__(self, document, output_document):
         nodes.NodeVisitor.__init__(self, document)  # assigns self.document
-        # document.settings
-        self._desc_stack = []
-        self._path_data = {}
-
+        self._swagger_doc = output_document
         self._current_node = None
-        self._current_path_name = None
-        self._current_path_data = {}
 
         for node_type in ('document', 'section', 'title', 'Text', 'index',
                           'signature', 'desc', 'desc_signature', 'desc_name',
@@ -89,8 +62,6 @@ class SwaggerTranslator(nodes.NodeVisitor):
 
     def reset_path_data(self, node):
         self._current_node = node
-        self._current_path_name = None
-        self._current_path_data = {}
 
     def visit_desc(self, node):
         if isinstance(node, addnodes.desc) and node['domain'] == 'http':
@@ -100,96 +71,92 @@ class SwaggerTranslator(nodes.NodeVisitor):
         """
         :param docutils.nodes.Element node:
         """
-        if node is self._current_node:
-            xlated = self.walk(node)
-            with open('out.json', 'w') as f:
-                json.dump(xlated, f, indent=2)
+        if node is not self._current_node:
+            return
 
-            idx = node.first_child_matching_class(addnodes.desc_signature)
-            if idx is None:
-                self._current_node = None
-                return
+        # TODO remove this ... useful for debugging only
+        xlated = self.walk(node)
+        with open('out.json', 'w') as f:
+            json.dump(xlated, f, indent=2)
+        # END TODO
 
-            child = node.children[idx]
-            path_info = {
-                'description': '',
-                'responses': {},
-            }
-
-            patn = re.compile(r'\(\?P<([^>]*)>.*\)')
-            tpath = child['path']
-            while True:
-                maybe_changed = patn.sub(r'{\1}', tpath)
-                if maybe_changed == tpath:
-                    break
-                tpath = maybe_changed
-            child['path'] = tpath
-
-            p = _swagger_document['paths'].setdefault(child['path'], {})
-            p[child['method']] = path_info
-
-            idx = node.first_child_matching_class(addnodes.desc_content)
-            if idx is not None:
-                default = 'default'
-                for child in node.children[idx].children:
-                    if isinstance(child, nodes.paragraph):  # amend description
-                        p = _render_paragraph(child)
-                        if path_info['description']:
-                            path_info['description'] += '\n\n'
-                        path_info['description'] += p
-
-                    if isinstance(child, nodes.field_list):  # list of some sort
-                        for field in child.children:
-                            # assumptions ...
-                            assert isinstance(field, nodes.field)
-                            assert isinstance(field[0], nodes.field_name)
-                            assert isinstance(field[1], nodes.field_body)
-
-                            name = field[0]
-                            if name.astext() == 'Response JSON Object':
-                                rsp = _render_response_information(field[1])
-                                if rsp is not None:
-                                    path_info['responses']['default'] = rsp
-
-                            elif name.astext() == 'Status Codes':
-                                for code, _, description in _render_status_codes(field[1]):
-                                    if default == 'default' and 200 <= int(code) < 300:
-                                        d = path_info['responses']['default']
-                                        path_info['responses'].pop('default')
-                                        path_info['responses'][code] = d
-                                        default = code
-                                    path_info['responses'].setdefault(code, {})
-                                    path_info['responses'][code]['description'] = description
-
-                            elif name.astext() == 'Response Headers':
-                                path_info['responses'][default].setdefault('headers', {})
-                                headers = path_info['responses'][default]['headers']
-                                for name, spec in _render_headers(field[1]):
-                                    headers[name] = spec
-
-                            elif name.astext() == 'Request Headers':
-                                path_info.setdefault('parameters', [])
-                                for name, spec in _render_headers(field[1]):
-                                    spec['name'] = name
-                                    spec['in'] = 'header'
-                                    path_info['parameters'].append(spec)
-
-                            elif name.astext() == 'Parameters':
-                                path_info.setdefault('parameters', [])
-                                for name, spec in _render_headers(field[1]):
-                                    spec['name'] = name
-                                    spec['in'] = 'path'
-                                    spec['required'] = True
-                                    path_info['parameters'].append(spec)
-
-                            elif name.astext() == 'Query Parameters':
-                                path_info.setdefault('parameters', [])
-                                for name, spec in _render_headers(field[1]):
-                                    spec['name'] = name
-                                    spec['in'] = 'query'
-                                    path_info['parameters'].append(spec)
-
+        idx = node.first_child_matching_class(addnodes.desc_signature)
+        if idx is None:  # no detail about the signature, skip it
             self._current_node = None
+            return
+
+        desc_signature = node.children[idx]
+        url_template = _convert_url(desc_signature['path'])
+        description = ''
+        responses = {}
+        parameters = []
+
+        idx = node.first_child_matching_class(addnodes.desc_content)
+        if idx is None:  # no content, skip
+            return
+
+        default = 'default'
+        for child in node.children[idx].children:
+            if isinstance(child, nodes.paragraph):
+                p = _render_paragraph(child)
+                if description:
+                    description += '\n\n'
+                description += p
+
+            if isinstance(child, nodes.field_list):  # list of some sort
+                for field in child.children:
+                    # assumptions, assumptions, assumptions ...
+                    assert isinstance(field, nodes.field)
+                    assert isinstance(field[0], nodes.field_name)
+                    assert isinstance(field[1], nodes.field_body)
+
+                    name = field[0]
+                    if name.astext() == 'Response JSON Object':
+                        rsp = _render_response_information(field[1])
+                        if rsp is not None:
+                            responses['default'] = rsp
+
+                    elif name.astext() == 'Status Codes':
+                        for code, _, description in _generate_status_codes(field[1]):
+                            if default == 'default' and 200 <= int(code) < 300:
+                                d = responses['default']
+                                responses.pop('default')
+                                responses[code] = d
+                                default = code
+                            responses.setdefault(code, {})
+                            responses[code]['description'] = description
+
+                    elif name.astext() == 'Response Headers':
+                        responses[default].setdefault('headers', {})
+                        headers = responses[default]['headers']
+                        for name, spec in _generate_parameters(field[1]):
+                            headers[name] = spec
+
+                    elif name.astext() == 'Request Headers':
+                        for name, spec in _generate_parameters(field[1]):
+                            spec['name'] = name
+                            spec['in'] = 'header'
+                            parameters.append(spec)
+
+                    elif name.astext() == 'Parameters':
+                        for name, spec in _generate_parameters(field[1]):
+                            spec['name'] = name
+                            spec['in'] = 'path'
+                            spec['required'] = True
+                            parameters.append(spec)
+
+                    elif name.astext() == 'Query Parameters':
+                        for name, spec in _generate_parameters(field[1]):
+                            spec['name'] = name
+                            spec['in'] = 'query'
+                            parameters.append(spec)
+
+        if responses:
+            self._swagger_doc.add_path_info(
+                desc_signature['method'], url_template, description,
+                parameters, responses)
+
+        self._current_node = None
 
     def default_visit(self, node):
         print('entering', type(node))
@@ -263,7 +230,7 @@ def _render_response_information(body):
     return response_obj
 
 
-def _render_status_codes(body):
+def _generate_status_codes(body):
     """
     :param nodes.field_body body:
     :returns: :data:`tuple` of (code, reason, description)
@@ -290,7 +257,7 @@ def _render_status_codes(body):
         yield code, reason or description, description
 
 
-def _render_headers(body):
+def _generate_parameters(body):
     """
     :param nodes.field_body body:
     :returns: :data:`tuple` of (name, dict)
@@ -308,6 +275,26 @@ def _render_headers(body):
             'type': 'string',
             'description': ''.join(t.astext() for t in para[2:])
         }
+
+
+def _convert_url(url):
+    """
+    Convert a URL regex to a URL template.
+
+    :param str url: regular expression pattern to convert
+    :return: `url` converted to a URL template
+
+    """
+    start_url = url
+    for attempt in range(0, 100):
+        maybe_changed = URI_TEMPLATE_RE.sub(r'{\1}', url)
+        if maybe_changed == url:
+            return url
+        url = maybe_changed
+
+    raise RuntimeError('failed to convert {} to a URL Template '
+                       'after {} tries'.format(start_url, attempt))
+
 
 """
 {"swagger":"2.0"
@@ -343,3 +330,30 @@ def _render_headers(body):
 ,"security":[]
 ,"tags":[]}
 """
+
+
+class SwaggerDocument(object):
+
+    def __init__(self):
+        super(SwaggerDocument, self).__init__()
+        self._paths = {}
+
+    def get_document(self, config):
+        """
+        :param sphinx.config.Config config: project-level configuration
+        :return: swagger document as a :class`dict`
+        :rtype: dict
+        """
+        return {'swagger': '2.0',
+                'info': {'title': config.project, 'version': config.version},
+                'host': 'localhost:8000',
+                'basePath': '/',
+                'paths': copy.deepcopy(self._paths)}
+
+    def add_path_info(self, method, url_template, description,
+                      parameters, responses):
+        path_info = self._paths.setdefault(url_template, {})
+        path_info[method] = {'description': description,
+                             'responses': copy.deepcopy(responses)}
+        if parameters:
+            path_info[method]['parameters'] = copy.deepcopy(parameters)

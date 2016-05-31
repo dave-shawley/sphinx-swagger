@@ -19,7 +19,8 @@ class SwaggerBuilder(builders.Builder):
 
     def prepare_writing(self, docnames):
         """Called before :meth:`write_doc`"""
-        self.writer = writer.SwaggerWriter()
+        self.swagger = writer.SwaggerDocument()
+        self.writer = writer.SwaggerWriter(swagger_document=self.swagger)
 
     def write_doc(self, docname, doctree):
         """Write a doc to the filesystem."""
