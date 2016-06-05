@@ -1,8 +1,6 @@
 from __future__ import print_function
 
 import docutils.io
-import json
-import os.path
 
 from sphinx import builders
 
@@ -29,7 +27,7 @@ class SwaggerBuilder(builders.Builder):
 
     def get_outdated_docs(self):
         """List of docs that we need to write or just a file name."""
-        return 'swagger.json'
+        return self.app.config.swagger_file
 
     def get_target_uri(self, docname, typ=None):
         return ''  # No clue what to return here :/

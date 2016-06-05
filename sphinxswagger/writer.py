@@ -8,6 +8,9 @@ from sphinx import addnodes
 
 
 URI_TEMPLATE_RE = re.compile(r'\(\?P<([^>]*)>.*\)')
+PARAMETER_RE = re.compile(r'(?P<name>[^ ]*)\s+'
+                          r'(\((?P<type>[^)]*)\))?\s*'
+                          r'--\s+(?P<description>.*)')
 
 
 def write_swagger_file(app, exception):
@@ -18,7 +21,10 @@ def write_swagger_file(app, exception):
     if exception is not None:
         return
 
-    with open(os.path.join(app.outdir, 'swagger.json'), 'w') as f:
+    if getattr(app.builder, 'swagger', None) is None:
+        return
+
+    with open(os.path.join(app.outdir, app.config.swagger_file), 'w') as f:
         json.dump(app.builder.swagger.get_document(app.config), f, indent=2)
 
 
@@ -34,25 +40,12 @@ class SwaggerWriter(writers.Writer):
         self.document.walkabout(visitor)
 
 
-class SwaggerTranslator(nodes.NodeVisitor):
+class SwaggerTranslator(nodes.SparseNodeVisitor):
 
     def __init__(self, document, output_document):
         nodes.NodeVisitor.__init__(self, document)  # assigns self.document
         self._swagger_doc = output_document
         self._current_node = None
-
-        for node_type in ('document', 'section', 'title', 'Text', 'index',
-                          'signature', 'desc', 'desc_signature', 'desc_name',
-                          'desc_content', 'paragraph', 'field_list',
-                          'field', 'field_name', 'field_body',
-                          'bullet_list', 'list_item', 'literal_strong',
-                          'literal_emphasis', 'title_reference', 'reference',
-                          'target', 'literal', 'emphasis', 'strong',
-                          'literal_block', 'compound', 'problematic'):
-            if not hasattr(self, 'visit_' + node_type):
-                setattr(self, 'visit_' + node_type, self.default_visit)
-            if not hasattr(self, 'depart_' + node_type):
-                setattr(self, 'depart_' + node_type, self.default_depart)
 
     def warning(self, *args, **kwargs):
         self.document.reporter.warning(*args, **kwargs)
@@ -75,9 +68,8 @@ class SwaggerTranslator(nodes.NodeVisitor):
             return
 
         # TODO remove this ... useful for debugging only
-        xlated = self.walk(node)
         with open('out.json', 'w') as f:
-            json.dump(xlated, f, indent=2)
+            json.dump(_generate_debug_tree(node), f, indent=2)
         # END TODO
 
         idx = node.first_child_matching_class(addnodes.desc_signature)
@@ -96,7 +88,7 @@ class SwaggerTranslator(nodes.NodeVisitor):
             return
 
         default = 'default'
-        for child in node.children[idx].children:
+        for child in node[idx].children:
             if isinstance(child, nodes.paragraph):
                 p = _render_paragraph(child)
                 if description:
@@ -114,17 +106,17 @@ class SwaggerTranslator(nodes.NodeVisitor):
                     if name.astext() == 'Response JSON Object':
                         rsp = _render_response_information(field[1])
                         if rsp is not None:
-                            responses['default'] = rsp
+                            responses.setdefault(default, {})
+                            responses[default].update(rsp)
 
                     elif name.astext() == 'Status Codes':
-                        for code, _, description in _generate_status_codes(field[1]):
+                        for code, _, desc in _generate_status_codes(field[1]):
                             if default == 'default' and 200 <= int(code) < 300:
-                                d = responses['default']
-                                responses.pop('default')
+                                d = responses.pop('default', {})
                                 responses[code] = d
                                 default = code
                             responses.setdefault(code, {})
-                            responses[code]['description'] = description
+                            responses[code]['description'] = desc
 
                     elif name.astext() == 'Response Headers':
                         responses[default].setdefault('headers', {})
@@ -158,19 +150,14 @@ class SwaggerTranslator(nodes.NodeVisitor):
 
         self._current_node = None
 
-    def default_visit(self, node):
-        print('entering', type(node))
 
-    def default_depart(self, node):
-        print('departing', type(node))
-
-    def walk(self, node):
-        n = {'type': str(type(node)),
-             'attributes': node.attributes if hasattr(node, 'attributes') else {},
-             'children': [self.walk(x) for x in node.children]}
-        if isinstance(node, nodes.Text):
-            n['value'] = str(node)
-        return n
+def _generate_debug_tree(node):
+    n = {'type': str(type(node)),
+         'attributes': node.attributes if hasattr(node, 'attributes') else {},
+         'children': [_generate_debug_tree(x) for x in node.children]}
+    if isinstance(node, nodes.Text):
+        n['value'] = str(node)
+    return n
 
 
 def _render_paragraph(paragraph):
@@ -194,16 +181,12 @@ def _render_response_information(body):
     bullet_list = body[0]
 
     response_obj = {
+        'description': '',
         'schema': {
             'type': 'object',
             'required': [],
             'properties': {},
         },
-    }
-    types = {
-        'str': 'string',
-        'int': 'number',
-        'float': 'number',
     }
 
     for list_item in bullet_list.children:
@@ -212,20 +195,14 @@ def _render_response_information(body):
 
         para = list_item[0]
         assert isinstance(para, nodes.paragraph)
-        assert len(para.children) >= 5
 
-        # 0: name
-        # 1: '('
-        # 2: type
-        # 3: ')'
-        # 4: ' -- '
-        # 5*: description
-        name = para[0].astext()
-        type_ = types.get(para[2].astext(), 'string')
-        descr = ''.join(segment.astext() for segment in para[5:])
-        response_obj['schema']['required'].append(name)
-        response_obj['schema']['properties'][name] = {'type': type_,
-                                                      'description': descr}
+        obj_info = _parsed_typed_object(para)
+        if obj_info:
+            response_obj['schema']['required'].append(obj_info['name'])
+            response_obj['schema']['properties'][obj_info['name']] = {
+                'type': obj_info['type'],
+                'description': obj_info['description'],
+            }
 
     return response_obj
 
@@ -266,15 +243,54 @@ def _generate_parameters(body):
     bullet_list = body[0]
 
     for list_item in bullet_list.children:
-        para = list_item[0]
+        assert isinstance(list_item, nodes.list_item)
+        assert len(list_item.children) == 1
 
-        # 0: name
-        # 1: ' -- '
-        # 2*: description
-        yield para[0].astext(), {
-            'type': 'string',
-            'description': ''.join(t.astext() for t in para[2:])
-        }
+        para = list_item[0]
+        assert isinstance(para, nodes.paragraph)
+
+        obj_info = _parsed_typed_object(para)
+        if obj_info:
+            yield obj_info['name'], {
+                'type': obj_info['type'],
+                'description': obj_info['description'],
+            }
+
+
+def _parsed_typed_object(paragraph):
+    """
+    Parses a typed-object description like ``name (type) -- description``.
+
+    :param docutils.nodes.paragraph paragraph:
+
+    :return: :class:`dict` containing the name, type, and description
+        as strings or an empty :class:`dict`
+    :rtype: dict
+
+    """
+    type_map = {
+        'str': 'string',
+        'int': 'number',
+        'float': 'number',
+        'object': 'object',
+        'dict': 'object',
+    }
+
+    name = paragraph[0].astext()
+    if paragraph[1].astext() == ' (':
+        t = type_map.get(paragraph[2].astext()) or 'string'
+        desc_start = 5
+    else:
+        t = 'string'
+        desc_start = 2
+
+    description = '\n\n'.join(n.astext() for n in paragraph[desc_start:])
+
+    return {
+        'name': name,
+        'type': t,
+        'description': description,
+    }
 
 
 def _convert_url(url):
@@ -344,8 +360,17 @@ class SwaggerDocument(object):
         :return: swagger document as a :class`dict`
         :rtype: dict
         """
+        info = {
+            'title': config.project,
+            'version': config.version,
+        }
+        try:
+            info['description'] = config.html_theme_options['description']
+        except AttributeError:
+            pass
+
         return {'swagger': '2.0',
-                'info': {'title': config.project, 'version': config.version},
+                'info': info,
                 'host': 'localhost:8000',
                 'basePath': '/',
                 'paths': copy.deepcopy(self._paths)}

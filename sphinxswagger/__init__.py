@@ -6,7 +6,7 @@ def setup(app):
     from . import builder, writer
 
     app.add_builder(builder.SwaggerBuilder)
-    app.add_config_value('swagger_file', 'swagger.json', 'html')
+    app.add_config_value('swagger_file', 'swagger.json', True)
     app.connect('build-finished', writer.write_swagger_file)
 
     return {'version': __version__}
