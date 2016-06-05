@@ -368,6 +368,8 @@ class SwaggerDocument(object):
             info['description'] = config.html_theme_options['description']
         except AttributeError:
             pass
+        if config.swagger_license:
+            info['license'] = config.swagger_license
 
         return {'swagger': '2.0',
                 'info': info,

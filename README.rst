@@ -21,4 +21,11 @@ This extension contains a few useful configuration values:
    generated in the sphinx output directory -- usually *build/sphinx/swagger*.
    The default file name is *swagger.json*.
 
+:swagger_license:
+   A dictionary that describes the license that governs the API.  This
+   is written as-is to the `License`_ section of the API document.  It should
+   contain two keys -- **name** and **url**.
+
 .. _httpdomain: https://pythonhosted.org/sphinxcontrib-httpdomain/
+.. _License: https://github.com/OAI/OpenAPI-Specification/blob/master/
+   versions/2.0.md#licenseObject
