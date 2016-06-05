@@ -67,11 +67,6 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
         if node is not self._current_node:
             return
 
-        # TODO remove this ... useful for debugging only
-        with open('out.json', 'w') as f:
-            json.dump(_generate_debug_tree(node), f, indent=2)
-        # END TODO
-
         idx = node.first_child_matching_class(addnodes.desc_signature)
         if idx is None:  # no detail about the signature, skip it
             self._current_node = None
@@ -86,6 +81,14 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
         idx = node.first_child_matching_class(addnodes.desc_content)
         if idx is None:  # no content, skip
             return
+
+        # TODO remove this ... useful for debugging only
+        with open('out-{}.json'.format(len(self._swagger_doc._paths)), 'w') as f:
+            data = _generate_debug_tree(node)
+            data['signature'] = desc_signature['path']
+            data['url_template'] = url_template
+            json.dump(data, f, indent=2)
+        # END TODO
 
         default = 'default'
         for child in node[idx].children:
@@ -143,10 +146,9 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
                             spec['in'] = 'query'
                             parameters.append(spec)
 
-        if responses:
-            self._swagger_doc.add_path_info(
-                desc_signature['method'], url_template, description,
-                parameters, responses)
+        self._swagger_doc.add_path_info(
+            desc_signature['method'], url_template, description,
+            parameters, responses)
 
         self._current_node = None
 
@@ -381,6 +383,8 @@ class SwaggerDocument(object):
                       parameters, responses):
         path_info = self._paths.setdefault(url_template, {})
         path_info[method] = {'description': description,
-                             'responses': copy.deepcopy(responses)}
+                             'responses': {'default': {'description': ''}}}
         if parameters:
             path_info[method]['parameters'] = copy.deepcopy(parameters)
+        if responses:
+            path_info[method]['responses'] = copy.deepcopy(responses)

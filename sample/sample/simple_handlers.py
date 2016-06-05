@@ -37,7 +37,8 @@ class JSONHandlerMixin(object):
 
     def write_json(self, obj):
         self.set_header('Content-Type', 'application/json; charset=UTF-8')
-        self.write(json.dumps(obj, ensure_ascii=False, indent=2).encode('utf-8'))
+        self.write(
+            json.dumps(obj, ensure_ascii=False, indent=2).encode('utf-8'))
 
 
 class IPHandler(CORSAllowAll, JSONHandlerMixin, web.RequestHandler):
