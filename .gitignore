@@ -1,5 +1,11 @@
 build/
 dist/
+env/
 *.egg-info/
 __pycache__/
 *.pyc
+
+sample/sample/swagger.json
+sample/sample/build/
+sample/sample/dist/
+sample/sample/env/

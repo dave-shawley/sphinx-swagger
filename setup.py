@@ -28,6 +28,6 @@ setuptools.setup(
     long_description='\n'+open('README.rst').read(),
     author='Dave Shawley',
     author_email='daveshawley+python@gmail.com',
-    packages=setuptools.find_packages(),
+    packages=['sphinxswagger'],
     install_requires=read_requirements('installation.txt'),
 )
