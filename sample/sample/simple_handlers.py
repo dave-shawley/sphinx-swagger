@@ -56,6 +56,17 @@ class IPHandler(CORSAllowAll, JSONHandlerMixin, web.RequestHandler):
 
 class MethodHandler(CORSAllowAll, JSONHandlerMixin, web.RequestHandler):
 
+    def _get_response_body(self):
+        return {
+            'args': dict(
+                (name, ','.join(v.decode('ascii') for v in vals))
+                for name, vals in self.request.query_arguments.items()),
+            'headers': dict(self.request.headers),
+            'origin': self.request.remote_ip,
+            'url': '{}://{}{}'.format(self.request.protocol,
+                                      self.request.host, self.request.uri)
+        }
+
     def get(self):
         """
         Return the request details.
@@ -66,10 +77,56 @@ class MethodHandler(CORSAllowAll, JSONHandlerMixin, web.RequestHandler):
         :>json str url: requested URL
 
         """
-        self.write_json({
-            'args': dict(self.request.query_arguments),
-            'headers': dict(self.request.headers),
-            'origin': self.request.remote_ip,
-            'url': '{}://{}{}'.format(self.request.protocol,
-                                      self.request.host, self.request.uri)
+        self.write_json(self._get_response_body())
+
+    def post(self):
+        """
+        Return the request details.
+
+        :>json object args: mapping of query parameter names to values
+        :>json object headers: mapping of normalized header names to values
+        :>json str body: the raw request body
+        :>json object json: request body decoded as JSON if the request
+            content type is compatible, ``null`` otherwise
+        :>json str origin: requesting IP address
+        :>json str url: requested URL
+
+        """
+        response = self._get_response_body()
+        response.update({
+            'data': self.request.body.decode('utf-8'),
+            'json': None,
         })
+        if self.request.headers['Content-Type'].startswith('application/json'):
+            try:
+                response['json'] = json.loads(
+                    self.request.body.decode('utf-8'))
+            except:
+                pass
+        self.write_json(response)
+
+    def put(self):
+        """
+        Return the request details.
+
+        :>json object args: mapping of query parameter names to values
+        :>json object headers: mapping of normalized header names to values
+        :>json str body: the raw request body
+        :>json object json: request body decoded as JSON if the request
+            content type is compatible, ``null`` otherwise
+        :>json str origin: requesting IP address
+        :>json str url: requested URL
+
+        """
+        response = self._get_response_body()
+        response.update({
+            'data': self.request.body.decode('utf-8'),
+            'json': None,
+        })
+        if self.request.headers['Content-Type'].startswith('application/json'):
+            try:
+                response['json'] = json.loads(
+                    self.request.body.decode('utf-8'))
+            except:
+                pass
+        self.write_json(response)

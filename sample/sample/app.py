@@ -97,7 +97,7 @@ class Application(web.Application):
                                                        'swagger.json')
         super(Application, self).__init__(
             [web.url('/ip', simple_handlers.IPHandler),
-             web.url('/get', simple_handlers.MethodHandler),
+             web.url('/echo', simple_handlers.MethodHandler),
              web.url('/swagger.json', SwaggerHandler,
                      {'swagger_path': swagger_path})],
             **kwargs)
