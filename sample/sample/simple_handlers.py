@@ -130,3 +130,20 @@ class MethodHandler(CORSAllowAll, JSONHandlerMixin, web.RequestHandler):
             except:
                 pass
         self.write_json(response)
+
+
+class StatusHandler(CORSAllowAll, JSONHandlerMixin, web.RequestHandler):
+
+    def get(self, code):
+        """
+        Exit with the specified status.
+
+        :param int code: the status code to exit with
+        :query str reason: optional HTTP reason to return
+
+        :returns: echoes `code` as the status and either the default
+            HTTP reason for `code` or `reason`.
+
+        """
+        self.set_status(int(code),
+                        reason=self.get_query_argument('reason', None))
