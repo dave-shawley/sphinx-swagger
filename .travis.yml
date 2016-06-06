@@ -1,10 +1,21 @@
 language: python
 python:
-  - '2.7'
-  - '3.4'
-  - '3.5'
+- '2.7'
+- '3.4'
+- '3.5'
 sudo: false
 install:
-  - pip install -q -r requires/development.txt
+- pip install -q -r requires/development.txt
 script:
-  - ./setup.py build_sphinx
+- "./setup.py build_sphinx"
+deploy:
+  provider: pypi
+  user: daveshawley
+  password:
+    secure: AFKcQSyfXnZGUAF5jfKZV8R5c+dFyPhJKBqaiVBaLoisOYpPksS4CBof/XTQfcB7lADWVHkIUv4vClmYaBU5CQ7XTJAwUQapDZMtNPiG7LIIxfecBeUI9kv+hnyqtVzzqZ/4cTP4J0+IqrmfePkNZ5QOgI+4pYiA/mvK6oBImx3LGc501vOxaLa9kag75u6J0ZCS0w4hq5LIhZZAWbVn963SZ4ChkAZJ7r2uzudKnQDD5EqJPLqWHzBA90sbnPkD2uin7r1BHHyKyYrxG9WcnSrqs98Hw/5AgypU2KEBS3XxJZqHI4eV5eAeG/pGmu2j51tYWG376Jnv5EaTfcFMYTsoXH2zrQjxQ3QzMi38BVIhQ+wIzcjY8nqVjT9oMpPFa8JEiPnVvES/hzdEFUjocakS/OtlePHy/6So8Dnbx25y4+YS7NnVytH6NEe6NqWuZ74CYQPiH5y+tjWL2P1QUZoka0Io1KsUSC8B+uKJpGrkbip1eQQsOm01zz2wGQ26Rb+Qrzu77iSZ75eZLCQw0zg0w26+SGHOfvB4qWNgspxrnZAeZyZTVFxuSm0yaG1CGj3vIyQD1kdIUE7sAK+XLNQefIUSgRlhP3uf3gczLo65AjnHJVyAfiBjW2M3Ffhu1rudt4DfimYjMKxwN3BFDms//ExgC0uLwaM+OYAGC4I=
+  distributions: sdist bdist_wheel
+  on:
+    tags: true
+    all_branches: true
+    repo: dave-shawley/sphinx-swagger
+    python: 3.5
