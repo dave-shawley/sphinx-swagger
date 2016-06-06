@@ -83,11 +83,12 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
             return
 
         # TODO remove this ... useful for debugging only
-        with open('out-{}.json'.format(len(self._swagger_doc._paths)), 'w') as f:
-            data = _generate_debug_tree(node)
-            data['signature'] = desc_signature['path']
-            data['url_template'] = url_template
-            json.dump(data, f, indent=2)
+        # debug_name = 'out-{}.json'.format(len(self._swagger_doc._paths))
+        # with open(debug_name, 'w') as f:
+        #     data = _generate_debug_tree(node)
+        #     data['signature'] = desc_signature['path']
+        #     data['url_template'] = url_template
+        #     json.dump(data, f, indent=2)
         # END TODO
 
         default = 'default'
@@ -216,7 +217,7 @@ def _generate_status_codes(body):
     :rtype: tuple
     """
     if len(body.children) > 1 or not isinstance(body[0], nodes.bullet_list):
-        return None
+        return
 
     bullet_list = body[0]
 
@@ -312,42 +313,6 @@ def _convert_url(url):
 
     raise RuntimeError('failed to convert {} to a URL Template '
                        'after {} tries'.format(start_url, attempt))
-
-
-"""
-{"swagger":"2.0"
-,"info":{"title":"Title String"
-        ,"description":"in Github-Flavored Markdown"
-        ,"termsOfService":"http://swagger.io/terms/"
-        ,"contact":{"name":"$AUTHOR_NAME"
-                   ,"email":"api@example.com"
-                   ,"url":"http://api.aweber.com/"}
-        ,"license":{"name":"BSD"
-                   ,"url":"http://license.url"}
-        ,"version":"$PROJECT_VERSION"}
-,"host":"localhost:8000"
-,"basePath":"/"
-,"schemes":["http"]
-,"consumes":["application/json"]
-,"produces":["application/json"]
-,"paths":{"/status":{"get":{"description":""
-                           ,"responses":{"200":{"description":"the application is functional"
-                                               ,"schema":{"$ref":"#/definitions/Status"}}}}}}
-,"definitions":{"Status":{"type":"object"
-                         ,"description":"Application status information"
-                         ,"required":["application","version","status"]
-                         ,"properties":{"application":{"type":"string"
-                                       ,"description":"the name of the service"}
-                                       ,"version":{"type":"string"
-                                                  ,"description":"the deployed application version"}
-                                       ,"status":{"type":"string"
-                                                 ,"description":"status of the application"}}}}
-,"parameters":{}
-,"responses":{}
-,"securityDefinitions":{}
-,"security":[]
-,"tags":[]}
-"""
 
 
 class SwaggerDocument(object):
