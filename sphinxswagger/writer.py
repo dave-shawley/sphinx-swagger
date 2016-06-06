@@ -216,7 +216,7 @@ def _generate_status_codes(body):
     :rtype: tuple
     """
     if len(body.children) > 1 or not isinstance(body[0], nodes.bullet_list):
-        return None
+        return
 
     bullet_list = body[0]
 
