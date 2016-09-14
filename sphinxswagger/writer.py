@@ -92,6 +92,7 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
         # END TODO
 
         default = 'default'
+        responses[default] = {}
         for child in node[idx].children:
             if isinstance(child, nodes.paragraph):
                 p = _render_paragraph(child)
