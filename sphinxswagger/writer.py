@@ -114,6 +114,33 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
                             responses.setdefault(default, {})
                             responses[default].update(rsp)
 
+                    elif name.astext() == 'Response JSON Array of Objects':
+                        obj_def = _render_response_information(field[1])
+                        if obj_def is not None:
+                            responses.setdefault(default, {})
+                            responses[default].update({
+                                'description': obj_def['description'],
+                                'schema': {
+                                    'type': 'array',
+                                    'items': obj_def['schema'],
+                                }
+                            })
+
+                    elif name.astext() == 'Request JSON Object':
+                        properties = {}
+                        for name, spec in _generate_parameters(field[1]):
+                            properties[name] = {
+                                'type': spec['type'],
+                                'description': spec['description']
+                            }
+                        parameters.append({'name': 'request-body',
+                                           'in': 'body',
+                                           'required': True,
+                                           'schema': {
+                                               'type': 'object',
+                                               'properties': properties,
+                                           }})
+
                     elif name.astext() == 'Status Codes':
                         for code, _, desc in _generate_status_codes(field[1]):
                             if default == 'default' and 200 <= int(code) < 300:
@@ -148,6 +175,9 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
                             spec['in'] = 'query'
                             parameters.append(spec)
 
+        for k in tuple(responses.keys()):
+            if not responses[k]:
+                del responses[k]
         self._swagger_doc.add_path_info(
             desc_signature['method'], url_template, description,
             parameters, responses)
@@ -172,6 +202,15 @@ def _render_paragraph(paragraph):
     lines = [t.astext() for t in paragraph.children
              if isinstance(t, nodes.Text)]
     return '\n\n'.join(lines)
+
+
+def _render_request_document(body):
+    """
+    :param nodes.field_body body:
+    :rtype: dict|NoneType
+    """
+    if len(body.children) > 1 or not isinstance(body[0], nodes.bullet_list):
+        return None
 
 
 def _render_response_information(body):
