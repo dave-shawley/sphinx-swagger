@@ -175,6 +175,9 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
                             spec['in'] = 'query'
                             parameters.append(spec)
 
+        for k in tuple(responses.keys()):
+            if not responses[k]:
+                del responses[k]
         self._swagger_doc.add_path_info(
             desc_signature['method'], url_template, description,
             parameters, responses)
