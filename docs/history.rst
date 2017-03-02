@@ -1,6 +1,10 @@
 Release History
 ===============
 
+`Next Release`_
+---------------
+- Added support for JSON responses.
+
 `0.0.1`_ (2016 Jun 06)
 ----------------------
 - Initial release with simple Sphinx writer+builder.
