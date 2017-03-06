@@ -1,5 +1,3 @@
-from __future__ import print_function
-
 import docutils.io
 
 from sphinx import builders

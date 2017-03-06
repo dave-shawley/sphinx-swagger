@@ -380,8 +380,8 @@ class SwaggerDocument(object):
         }
         try:
             info['description'] = config.html_theme_options['description']
-        except AttributeError:
-            pass
+        except (AttributeError, KeyError):
+            info['description'] = ''
         if config.swagger_license:
             info['license'] = config.swagger_license
 
