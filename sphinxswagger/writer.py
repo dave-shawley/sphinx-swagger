@@ -3,6 +3,10 @@ import copy
 import json
 import os.path
 import re
+try:
+    import http.client as http_client
+except ImportError:
+    import httplib as http_client
 
 from sphinx import addnodes
 
@@ -74,8 +78,8 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
 
         desc_signature = node.children[idx]
         url_template = _convert_url(desc_signature['path'])
-        description = ''
-        responses = {}
+        paragraphs = []
+        responses = {'default': {}}
         parameters = []
 
         idx = node.first_child_matching_class(addnodes.desc_content)
@@ -92,13 +96,9 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
         # END TODO
 
         default = 'default'
-        responses[default] = {}
         for child in node[idx].children:
             if isinstance(child, nodes.paragraph):
-                p = _render_paragraph(child)
-                if description:
-                    description += '\n\n'
-                description += p
+                paragraphs.append(_render_paragraph(child))
 
             if isinstance(child, nodes.field_list):  # list of some sort
                 for field in child.children:
@@ -179,7 +179,7 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
             if not responses[k]:
                 del responses[k]
         self._swagger_doc.add_path_info(
-            desc_signature['method'], url_template, description,
+            desc_signature['method'], url_template, paragraphs,
             parameters, responses)
 
         self._current_node = None
@@ -273,8 +273,15 @@ def _generate_status_codes(body):
         # 1: ' -- '
         # 2*: description
         code, _, reason = para.children[0].astext().partition(' ')
+        if not reason:
+            try:
+                reason = http_client.responses.get(int(reason))
+            except (KeyError, TypeError, ValueError):
+                pass
         description = ''.join(t.astext() for t in para.children[2:])
-        yield code, reason or description, description
+        if reason:
+            description = reason + '\n\n' + description
+        yield code, _, description
 
 
 def _generate_parameters(body):
@@ -387,9 +394,13 @@ class SwaggerDocument(object):
     def add_path_info(self, method, url_template, description,
                       parameters, responses):
         path_info = self._paths.setdefault(url_template, {})
-        path_info[method] = {'description': description,
-                             'responses': {'default': {'description': ''}}}
+        path_info[method] = {}
+        if len(description) > 1 and len(description[0]) < 120:
+            path_info[method]['summary'] = description.pop(0)
+        path_info[method]['description'] = '\n\n'.join(description)
         if parameters:
             path_info[method]['parameters'] = copy.deepcopy(parameters)
         if responses:
             path_info[method]['responses'] = copy.deepcopy(responses)
+        else:
+            path_info[method]['responses'] = {'default': {'description': ''}}
