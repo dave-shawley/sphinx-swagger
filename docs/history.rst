@@ -1,6 +1,10 @@
 Release History
 ===============
 
+`Next Release`_
+---------------
+- Add swagger_description configuration value.
+
 `0.0.2`_ (2017 Mar 2)
 ---------------------
 - Added support for JSON responses.

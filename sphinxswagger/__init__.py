@@ -17,6 +17,7 @@ def setup(app):
     app.add_builder(builder.SwaggerBuilder)
     app.add_config_value('swagger_file', 'swagger.json', True)
     app.add_config_value('swagger_license', {'name': 'Proprietary'}, True)
+    app.add_config_value('swagger_description', '', True)
     app.connect('build-finished', writer.write_swagger_file)
 
     return {'version': __version__}

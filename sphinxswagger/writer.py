@@ -378,10 +378,13 @@ class SwaggerDocument(object):
             'title': config.project,
             'version': config.version,
         }
-        try:
-            info['description'] = config.html_theme_options['description']
-        except (AttributeError, KeyError):
-            info['description'] = ''
+        if config.swagger_description:
+            info['description'] = config.swagger_description
+        else:
+            try:
+                info['description'] = config.html_theme_options['description']
+            except (AttributeError, KeyError):
+                info['description'] = ''
         if config.swagger_license:
             info['license'] = config.swagger_license
 

@@ -16,6 +16,11 @@ Configuration
 -------------
 This extension contains a few useful configuration values:
 
+:swagger_description:
+   Sets the description of the application in the generated swagger file.
+   If this is not set, then the "description" value in ``html_theme_options``
+   will be used if it is set.
+
 :swagger_file:
    Sets the name of the generated swagger file.  The file is always
    generated in the sphinx output directory -- usually *build/sphinx/swagger*.
