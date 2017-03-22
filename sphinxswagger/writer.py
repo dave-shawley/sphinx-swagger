@@ -129,9 +129,7 @@ class SwaggerTranslator(nodes.SparseNodeVisitor):
 
 
 class EndpointVisitor(nodes.SparseNodeVisitor):
-    """
-    Visits the content for a single endpoint.
-    """
+    """Visits the content for a single endpoint."""
 
     def __init__(self, document, endpoint):
         """
@@ -173,19 +171,36 @@ class EndpointVisitor(nodes.SparseNodeVisitor):
                 value_node.walkabout(visitor)
                 self.endpoint.add_request_headers(visitor.headers)
             elif name == 'Response Headers':
-                pass
+                visitor = HeaderVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.add_response_headers(visitor.headers)
             elif name == 'Parameters':
-                visitor = ParameterVisitor(self.document)
+                visitor = ParameterVisitor(self.document,
+                                           {'in': 'path', 'required': True})
                 value_node.walkabout(visitor)
                 self.endpoint.parameters.extend(visitor.parameters)
             elif name == 'Request JSON Object':
-                pass
+                visitor = ParameterVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.parameters.append({
+                    'name': 'request-body', 'in': 'body', 'required': True,
+                    'schema': visitor.get_schema()})
             elif name == 'Request JSON Array of Objects':
-                pass
+                visitor = ParameterVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.parameters.append({
+                    'name': 'request-body', 'in': 'body', 'required': True,
+                    'schema': {'type': 'array', 'items': visitor.get_schema()}
+                })
             elif name == 'Response JSON Object':
-                pass
+                visitor = ParameterVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.set_default_response_structure(visitor.parameters)
             elif name == 'Response JSON Array of Objects':
-                pass
+                visitor = ParameterVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.set_default_response_structure(
+                    visitor.parameters, is_array=True)
             else:
                 self.document.reporter.warning(
                     'unhandled field type: {}'.format(name), base_node=node)
@@ -195,9 +210,19 @@ class EndpointVisitor(nodes.SparseNodeVisitor):
 class ParameterVisitor(nodes.SparseNodeVisitor):
     """Visit a list of parameters and format them."""
 
-    def __init__(self, document):
+    def __init__(self, document, parameter_attributes=None):
         nodes.SparseNodeVisitor.__init__(self, document)
         self.parameters = []
+        self._fixed_attributes = (parameter_attributes or {}).copy()
+
+    def get_schema(self):
+        schema = {'type': 'object', 'properties': {}, 'required': []}
+        for param in self.parameters:
+            name = param['name']
+            schema['properties'][name] = param.copy()
+            del schema['properties'][name]['name']
+            schema['required'].append(name)
+        return schema
 
     def visit_list_item(self, node):
         """
@@ -225,13 +250,14 @@ class ParameterVisitor(nodes.SparseNodeVisitor):
             name = ' '.join(tokens[:idx])
             type = 'string'
 
-        self.parameters.append({'name': name,
-                                'type': type,
-                                'description': ' '.join(tokens[idx + 1:]),
-                                'in': 'path',
-                                'required': True})
+        description = ' '.join(tokens[idx + 1:]).strip()
+        description = description[0].upper() + description[1:]
 
-        raise nodes.SkipChildren
+        param_info = self._fixed_attributes.copy()
+        param_info.update({'name': name,
+                           'type': type,
+                           'description': description})
+        self.parameters.append(param_info)
 
 
 class StatusVisitor(nodes.SparseNodeVisitor):
@@ -260,6 +286,8 @@ class StatusVisitor(nodes.SparseNodeVisitor):
         reason = ' '.join(tokens[1:idx])
         description = ' '.join(tokens[idx+1:])
         self.status_info[code] = {'reason': reason, 'description': description}
+
+        raise nodes.SkipChildren
 
 
 class ParagraphVisitor(nodes.SparseNodeVisitor):
@@ -373,7 +401,7 @@ class HeaderVisitor(nodes.SparseNodeVisitor):
 
 def _generate_debug_tree(node):
     n = {'type': node.__class__.__name__,
-         'attributes': node.attributes if hasattr(node, 'attributes') else {},
+         # 'attributes': node.attributes if hasattr(node, 'attributes') else {},
          'children': [_generate_debug_tree(x) for x in node.children]}
     if isinstance(node, nodes.Text):
         n['value'] = str(node)

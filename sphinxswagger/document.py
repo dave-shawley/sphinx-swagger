@@ -55,6 +55,18 @@ class SwaggerEndpoint(object):
         self.description = ''
         self.parameters = []
         self.responses = {}
+        self.default_response_schema = None
+        self.response_headers = None
+
+    def set_default_response_structure(self, properties, is_array=False):
+        schema = {'type': 'object', 'properties': {}, 'required': []}
+        for prop in properties:
+            name = prop.pop('name')
+            schema['properties'][name] = prop.copy()
+            schema['required'].append(name)
+        if is_array:
+            schema = {'type': 'array', 'items': schema}
+        self.default_response_schema = schema
 
     def add_request_headers(self, headers):
         for name, description in headers.items():
@@ -64,6 +76,12 @@ class SwaggerEndpoint(object):
                 'in': 'header',
                 'type': 'string',
             })
+
+    def add_response_headers(self, headers):
+        self.response_headers = {
+            name: {'description': description, 'type': 'string'}
+            for name, description in headers.items()
+        }
 
     def add_response_codes(self, status_dict):
         for code, info in status_dict.items():
@@ -85,8 +103,30 @@ class SwaggerEndpoint(object):
         swagger = {'summary': self.summary, 'description': self.description}
         if self.parameters:
             swagger['parameters'] = self.parameters
+
         if self.responses:
             swagger['responses'] = self.responses
         else:  # swagger requires at least one response
             swagger['responses'] = {'default': {'description': ''}}
+
+        # Figure out where to put the response schema and response
+        # header details.  This is probably going to change in the
+        # future since it is `hinky' at best.
+        default_code = 'default'
+        status_codes = sorted(int(code)
+                              for code in swagger['responses']
+                              if code.isdigit())
+        for code in status_codes:
+            if 200 <= code < 400:
+                default_code = str(code)
+                break
+
+        if default_code in swagger['responses']:
+            if self.default_response_schema:
+                swagger['responses'][default_code]['schema'] = \
+                    self.default_response_schema
+            if self.response_headers:
+                swagger['responses'][default_code]['headers'] = \
+                    self.response_headers
+
         return swagger
