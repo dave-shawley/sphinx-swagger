@@ -3,7 +3,9 @@ Release History
 
 `Next Release`_
 ---------------
-- Add swagger_description configuration value.
+- Rewrite to be more resilient to changes in the underlying
+  docutil structure.
+- Added ``swagger`` setup command.
 
 `0.0.2`_ (2017 Mar 2)
 ---------------------
