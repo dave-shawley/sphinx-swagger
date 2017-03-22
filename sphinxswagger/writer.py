@@ -1,16 +1,12 @@
 from docutils import nodes, writers
-import copy
 import json
 import os.path
 import re
 
-from sphinx import addnodes
+from sphinxswagger import document
 
 
 URI_TEMPLATE_RE = re.compile(r'\(\?P<([^>]*)>.*\)')
-PARAMETER_RE = re.compile(r'(?P<name>[^ ]*)\s+'
-                          r'(\((?P<type>[^)]*)\))?\s*'
-                          r'--\s+(?P<description>.*)')
 
 
 def write_swagger_file(app, exception):
@@ -43,174 +39,373 @@ class SwaggerWriter(writers.Writer):
 class SwaggerTranslator(nodes.SparseNodeVisitor):
 
     def __init__(self, document, output_document):
+        """
+        :param docutils.nodes.document document:
+        :param sphinxswagger.document.Document output_document:
+        """
         nodes.NodeVisitor.__init__(self, document)  # assigns self.document
+        self.document = document  # tells pycharm the attributes type
+        document.reporter.report_level = document.reporter.DEBUG_LEVEL
         self._swagger_doc = output_document
+
+        self._current_node = None
+        self._endpoint = None
+
+    def debug(self, message, *args, **kwargs):
+        self.document.reporter.debug(message.format(*args, **kwargs),
+                                     base_node=self._current_node)
+
+    def info(self, message, *args, **kwargs):
+        self.document.reporter.info(message.format(*args, **kwargs),
+                                    base_node=self._current_node)
+
+    def warning(self, message, *args, **kwargs):
+        self.document.reporter.warning(message.format(*args, **kwargs),
+                                       base_node=self._current_node)
+
+    def error(self, message, *args, **kwargs):
+        self.document.reporter.error(message.format(*args, **kwargs),
+                                     base_node=self._current_node)
+
+    def _start_new_path(self, node):
+        """
+        :param sphinx.addnodes.desc node:
+        """
+        self._current_node = node
+        self._endpoint = document.SwaggerEndpoint()
+        self._endpoint.method = node['desctype']
+        self.info('processing {}', node['desctype'])
+
+    def _complete_current_path(self, node):
+        """
+        :param sphinx.addnodes.desc node:
+        """
+        assert self._current_node is node
+        self._swagger_doc.add_endpoint(self._endpoint,
+                                       _generate_debug_tree(node))
+        self._endpoint = None
         self._current_node = None
 
-    def warning(self, *args, **kwargs):
-        self.document.reporter.warning(*args, **kwargs)
-
-    def error(self, *args, **kwargs):
-        self.document.reporter.error(*args, **kwargs)
-
-    def reset_path_data(self, node):
-        self._current_node = node
-
     def visit_desc(self, node):
-        if isinstance(node, addnodes.desc) and node['domain'] == 'http':
-            self.reset_path_data(node)
+        if node['domain'] == 'http':
+            self._start_new_path(node)
+
+        if not self._endpoint:
+            raise nodes.SkipNode
 
     def depart_desc(self, node):
         """
         :param docutils.nodes.Element node:
         """
-        if node is not self._current_node:
+        if self._current_node is node:
+            self._complete_current_path(node)
             return
 
-        idx = node.first_child_matching_class(addnodes.desc_signature)
-        if idx is None:  # no detail about the signature, skip it
-            self._current_node = None
-            return
+    def visit_desc_signature(self, node):
+        """
+        Process a method signature.
 
-        desc_signature = node.children[idx]
-        url_template = _convert_url(desc_signature['path'])
-        description = ''
-        responses = {}
-        parameters = []
+        :param sphinx.addnodes.desc_signature node:
 
-        idx = node.first_child_matching_class(addnodes.desc_content)
-        if idx is None:  # no content, skip
-            return
+        """
+        self.debug('visiting {}: {!r}', node.__class__, node.attributes)
+        if node.parent is self._current_node:
+            # signature of the endpoint itself
+            self._endpoint.uri_template = _convert_url(node['path'])
 
-        # TODO remove this ... useful for debugging only
-        # debug_name = 'out-{}.json'.format(len(self._swagger_doc._paths))
-        # with open(debug_name, 'w') as f:
-        #     data = _generate_debug_tree(node)
-        #     data['signature'] = desc_signature['path']
-        #     data['url_template'] = url_template
-        #     json.dump(data, f, indent=2)
-        # END TODO
+    def visit_desc_content(self, node):
+        """
+        Process the method's description.
 
-        default = 'default'
-        responses[default] = {}
-        for child in node[idx].children:
-            if isinstance(child, nodes.paragraph):
-                p = _render_paragraph(child)
-                if description:
-                    description += '\n\n'
-                description += p
+        :param sphinx.addnodes.desc_content node:
 
-            if isinstance(child, nodes.field_list):  # list of some sort
-                for field in child.children:
-                    # assumptions, assumptions, assumptions ...
-                    assert isinstance(field, nodes.field)
-                    assert isinstance(field[0], nodes.field_name)
-                    assert isinstance(field[1], nodes.field_body)
+        """
+        self.debug('visiting {}: {!r}', node.__class__, node.attributes)
+        if node.parent is self._current_node:
+            # description of the endpoint itself
+            walker = EndpointVisitor(self.document, self._endpoint)
+            node.walkabout(walker)
+            self._endpoint.description = '\n\n'.join(walker.description)
 
-                    name = field[0]
-                    if name.astext() == 'Response JSON Object':
-                        rsp = _render_response_information(field[1])
-                        if rsp is not None:
-                            responses.setdefault(default, {})
-                            responses[default].update(rsp)
 
-                    elif name.astext() == 'Response JSON Array of Objects':
-                        obj_def = _render_response_information(field[1])
-                        if obj_def is not None:
-                            responses.setdefault(default, {})
-                            responses[default].update({
-                                'description': obj_def['description'],
-                                'schema': {
-                                    'type': 'array',
-                                    'items': obj_def['schema'],
-                                }
-                            })
+class EndpointVisitor(nodes.SparseNodeVisitor):
+    """Visits the content for a single endpoint."""
 
-                    elif name.astext() == 'Request JSON Object':
-                        properties = {}
-                        for name, spec in _generate_parameters(field[1]):
-                            properties[name] = {
-                                'type': spec['type'],
-                                'description': spec['description']
-                            }
-                        parameters.append({'name': 'request-body',
-                                           'in': 'body',
-                                           'required': True,
-                                           'schema': {
-                                               'type': 'object',
-                                               'properties': properties,
-                                           }})
+    def __init__(self, document, endpoint):
+        """
+        :param docutils.nodes.document document:
+        :param sphinxswagger.document.SwaggerEndpoint endpoint:
+        """
+        nodes.SparseNodeVisitor.__init__(self, document)
+        self.document = document
+        self.endpoint = endpoint
+        self.description = []
 
-                    elif name.astext() == 'Status Codes':
-                        for code, _, desc in _generate_status_codes(field[1]):
-                            if default == 'default' and 200 <= int(code) < 300:
-                                d = responses.pop('default', {})
-                                responses[code] = d
-                                default = code
-                            responses.setdefault(code, {})
-                            responses[code]['description'] = desc
+    def visit_paragraph(self, node):
+        """
+        :param docutils.nodes.paragraph node:
+        """
+        if not self.endpoint.summary:  # first paragraph is the summary
+            self.endpoint.summary = node.astext()
+        else:  # others are description
+            visitor = ParagraphVisitor(self.document)
+            node.walkabout(visitor)
+            self.description.append(visitor.get_paragraph())
 
-                    elif name.astext() == 'Response Headers':
-                        responses[default].setdefault('headers', {})
-                        headers = responses[default]['headers']
-                        for name, spec in _generate_parameters(field[1]):
-                            headers[name] = spec
+    def visit_field(self, node):
+        """
+        :param docutils.nodes.field node:
+        """
+        idx = node.first_child_matching_class(nodes.field_name)
+        if idx is not None:
+            name_node = node[idx]
+            idx = node.first_child_matching_class(nodes.field_body)
+            value_node = node[idx]
+            name = name_node.astext()
+            if name == 'Status Codes':
+                visitor = StatusVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.add_response_codes(visitor.status_info)
+            elif name == 'Request Headers':
+                visitor = HeaderVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.add_request_headers(visitor.headers)
+            elif name == 'Response Headers':
+                visitor = HeaderVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.add_response_headers(visitor.headers)
+            elif name == 'Parameters':
+                visitor = ParameterVisitor(self.document,
+                                           {'in': 'path', 'required': True})
+                value_node.walkabout(visitor)
+                self.endpoint.parameters.extend(visitor.parameters)
+            elif name == 'Request JSON Object':
+                visitor = ParameterVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.parameters.append({
+                    'name': 'request-body', 'in': 'body', 'required': True,
+                    'schema': visitor.get_schema()})
+            elif name == 'Request JSON Array of Objects':
+                visitor = ParameterVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.parameters.append({
+                    'name': 'request-body', 'in': 'body', 'required': True,
+                    'schema': {'type': 'array', 'items': visitor.get_schema()}
+                })
+            elif name == 'Response JSON Object':
+                visitor = ParameterVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.set_default_response_structure(visitor.parameters)
+            elif name == 'Response JSON Array of Objects':
+                visitor = ParameterVisitor(self.document)
+                value_node.walkabout(visitor)
+                self.endpoint.set_default_response_structure(
+                    visitor.parameters, is_array=True)
+            else:
+                self.document.reporter.warning(
+                    'unhandled field type: {}'.format(name), base_node=node)
+            raise nodes.SkipChildren
 
-                    elif name.astext() == 'Request Headers':
-                        for name, spec in _generate_parameters(field[1]):
-                            spec['name'] = name
-                            spec['in'] = 'header'
-                            parameters.append(spec)
 
-                    elif name.astext() == 'Parameters':
-                        for name, spec in _generate_parameters(field[1]):
-                            spec['name'] = name
-                            spec['in'] = 'path'
-                            spec['required'] = True
-                            parameters.append(spec)
+class ParameterVisitor(nodes.SparseNodeVisitor):
+    """Visit a list of parameters and format them."""
 
-                    elif name.astext() == 'Query Parameters':
-                        for name, spec in _generate_parameters(field[1]):
-                            spec['name'] = name
-                            spec['in'] = 'query'
-                            parameters.append(spec)
+    def __init__(self, document, parameter_attributes=None):
+        nodes.SparseNodeVisitor.__init__(self, document)
+        self.parameters = []
+        self._fixed_attributes = (parameter_attributes or {}).copy()
 
-        for k in tuple(responses.keys()):
-            if not responses[k]:
-                del responses[k]
-        self._swagger_doc.add_path_info(
-            desc_signature['method'], url_template, description,
-            parameters, responses)
+    def get_schema(self):
+        schema = {'type': 'object', 'properties': {}, 'required': []}
+        for param in self.parameters:
+            name = param['name']
+            schema['properties'][name] = param.copy()
+            del schema['properties'][name]['name']
+            schema['required'].append(name)
+        return schema
 
-        self._current_node = None
+    def visit_list_item(self, node):
+        """
+        :param docutils.nodes.list_item node:
+        """
+        type_map = {
+            'str': 'string',
+            'int': 'number',
+            'float': 'number',
+            'object': 'object',
+            'dict': 'object',
+        }
+
+        visitor = ParagraphVisitor(self.document)
+        node[0].walkabout(visitor)
+        tokens = visitor.get_paragraph().split()
+
+        # name (type) -- description
+        idx = tokens.index('--')
+        try:
+            s, e = tokens.index('(', 0, idx), tokens.index(')', 0, idx)
+            name = ' '.join(tokens[:s])
+            type = type_map.get(tokens[s+1]) or 'string'
+        except ValueError:
+            name = ' '.join(tokens[:idx])
+            type = 'string'
+
+        description = ' '.join(tokens[idx + 1:]).strip()
+        description = description[0].upper() + description[1:]
+
+        param_info = self._fixed_attributes.copy()
+        param_info.update({'name': name,
+                           'type': type,
+                           'description': description})
+        self.parameters.append(param_info)
+
+
+class StatusVisitor(nodes.SparseNodeVisitor):
+    """Visit HTTP status codes and render them."""
+
+    def __init__(self, document):
+        nodes.SparseNodeVisitor.__init__(self, document)
+        self.status_info = {}
+
+    def visit_list_item(self, node):
+        """
+        :param docutils.nodes.list_item node:
+        """
+        # 0: code (' ' reason)?
+        # 1: ' -- '
+        # 2+: description
+        visitor = ParagraphVisitor(self.document)
+        node[0].walkabout(visitor)
+        tokens = visitor.get_paragraph().split()
+        if tokens[0].startswith('['):  # have a link, protect it
+            code = tokens[0][1:]
+            tokens[1] = '[' + tokens[1]
+        else:
+            code = tokens[0]
+        idx = tokens.index('--')
+        reason = ' '.join(tokens[1:idx])
+        description = ' '.join(tokens[idx+1:])
+        self.status_info[code] = {'reason': reason, 'description': description}
+
+        raise nodes.SkipChildren
+
+
+class ParagraphVisitor(nodes.SparseNodeVisitor):
+    """
+    Renders a paragraph node into GitHub-Flavoured Markdown.
+
+    The result is a list of formatted chunks that you can retrieve
+    from :meth:`get_paragraph`.
+
+    """
+
+    def __init__(self, document):
+        nodes.SparseNodeVisitor.__init__(self, document)
+        self.chunks = []
+        self._stack = []
+
+    def get_paragraph(self):
+        """
+        Retrieve the formatted chunks of text.
+
+        :return: the formatted text as a :class:`str`
+        :rtype: str
+
+        """
+        return ' '.join(' '.join(chunk.strip().split())
+                        for chunk in self.chunks
+                        if chunk.strip())
+
+    def _push_position(self):
+        """Push the current position onto the stack."""
+        self._stack.append(len(self.chunks))
+
+    def _pop_saved_chunks(self):
+        """
+        Pop the chunks that have been collected since the last push.
+
+        :return: the chunks joined as a string
+        :rtype: str
+
+        """
+        start = self._stack.pop()
+        content = ' '.join(self.chunks[start:])
+        del self.chunks[start:]
+        return content
+
+    def visit_Text(self, node):
+        self.chunks.append(node.astext())
+        raise nodes.SkipChildren
+
+    def visit_reference(self, _):
+        self._push_position()
+
+    def depart_reference(self, node):
+        if 'refuri' in node.attributes:
+            content = self._pop_saved_chunks()
+            self.chunks.append('[{}]({})'.format(content,
+                                                 node.attributes['refuri']))
+        else:
+            self._stack.pop()
+
+    def visit_literal(self, _):
+        self._push_position()
+
+    def depart_literal(self, _):
+        self.chunks.append('`{}`'.format(self._pop_saved_chunks()))
+
+    def visit_emphasis(self, _):
+        self._push_position()
+
+    def depart_emphasis(self, _):
+        self.chunks.append('*{}*'.format(self._pop_saved_chunks()))
+
+    def visit_strong(self, _):
+        self._push_position()
+
+    def depart_strong(self, _):
+        self.chunks.append('**{}**'.format(self._pop_saved_chunks()))
+
+
+class HeaderVisitor(nodes.SparseNodeVisitor):
+    """Visit HTTP headers and collect them."""
+
+    def __init__(self, document):
+        nodes.SparseNodeVisitor.__init__(self, document)
+        self.headers = {}
+
+    def visit_list_item(self, node):
+        """
+        :param docutils.nodes.list_item node:
+        """
+        # 0: name
+        # 1: ' -- '
+        # 2: description
+        content = node[0]  # paragraph node
+        # normalize the header name so that words are upper-cased
+        normalized = ' '.join('-'.join(elm.title() for elm in word.split('-'))
+                              for word in content[0].astext().split())
+        if len(content) > 2:
+            first_para = content[2].astext()
+            words = first_para.split()
+            words[0] = words[0].title()
+            paragraphs = [' '.join(words)]
+            paragraphs.extend(t.astext().replace('\n', ' ').strip()
+                              for t in content[3:])
+            description = ' '.join(paragraphs)
+        else:
+            description = ''
+
+        self.headers[normalized] = description
 
 
 def _generate_debug_tree(node):
-    n = {'type': str(type(node)),
-         'attributes': node.attributes if hasattr(node, 'attributes') else {},
+    n = {'type': node.__class__.__name__,
+         # 'attributes': node.attributes if hasattr(node, 'attributes') else {},
          'children': [_generate_debug_tree(x) for x in node.children]}
     if isinstance(node, nodes.Text):
         n['value'] = str(node)
     return n
-
-
-def _render_paragraph(paragraph):
-    """
-    :param nodes.paragraph paragraph:
-    :returns: str
-    """
-    lines = [t.astext() for t in paragraph.children
-             if isinstance(t, nodes.Text)]
-    return '\n\n'.join(lines)
-
-
-def _render_request_document(body):
-    """
-    :param nodes.field_body body:
-    :rtype: dict|NoneType
-    """
-    if len(body.children) > 1 or not isinstance(body[0], nodes.bullet_list):
-        return None
 
 
 def _render_response_information(body):
@@ -250,56 +445,6 @@ def _render_response_information(body):
     return response_obj
 
 
-def _generate_status_codes(body):
-    """
-    :param nodes.field_body body:
-    :returns: :data:`tuple` of (code, reason, description)
-    :rtype: tuple
-    """
-    if len(body.children) > 1 or not isinstance(body[0], nodes.bullet_list):
-        return
-
-    bullet_list = body[0]
-
-    for list_item in bullet_list.children:
-        assert isinstance(list_item[0], nodes.paragraph)
-        assert len(list_item.children) == 1
-
-        para = list_item[0]
-        assert isinstance(para, nodes.paragraph)
-        assert len(para.children) >= 2
-
-        # 0: code ' ' reason
-        # 1: ' -- '
-        # 2*: description
-        code, _, reason = para.children[0].astext().partition(' ')
-        description = ''.join(t.astext() for t in para.children[2:])
-        yield code, reason or description, description
-
-
-def _generate_parameters(body):
-    """
-    :param nodes.field_body body:
-    :returns: :data:`tuple` of (name, dict)
-    :rtype: tuple
-    """
-    bullet_list = body[0]
-
-    for list_item in bullet_list.children:
-        assert isinstance(list_item, nodes.list_item)
-        assert len(list_item.children) == 1
-
-        para = list_item[0]
-        assert isinstance(para, nodes.paragraph)
-
-        obj_info = _parsed_typed_object(para)
-        if obj_info:
-            yield obj_info['name'], {
-                'type': obj_info['type'],
-                'description': obj_info['description'],
-            }
-
-
 def _parsed_typed_object(paragraph):
     """
     Parses a typed-object description like ``name (type) -- description``.
@@ -327,7 +472,8 @@ def _parsed_typed_object(paragraph):
         t = 'string'
         desc_start = 2
 
-    description = '\n\n'.join(n.astext() for n in paragraph[desc_start:])
+    description = '\n\n'.join(n.astext().replace('\n', ' ')
+                              for n in paragraph[desc_start:])
 
     return {
         'name': name,
@@ -353,43 +499,3 @@ def _convert_url(url):
 
     raise RuntimeError('failed to convert {} to a URL Template '
                        'after {} tries'.format(start_url, attempt))
-
-
-class SwaggerDocument(object):
-
-    def __init__(self):
-        super(SwaggerDocument, self).__init__()
-        self._paths = {}
-
-    def get_document(self, config):
-        """
-        :param sphinx.config.Config config: project-level configuration
-        :return: swagger document as a :class`dict`
-        :rtype: dict
-        """
-        info = {
-            'title': config.project,
-            'version': config.version,
-        }
-        try:
-            info['description'] = config.html_theme_options['description']
-        except AttributeError:
-            pass
-        if config.swagger_license:
-            info['license'] = config.swagger_license
-
-        return {'swagger': '2.0',
-                'info': info,
-                'host': 'localhost:8000',
-                'basePath': '/',
-                'paths': copy.deepcopy(self._paths)}
-
-    def add_path_info(self, method, url_template, description,
-                      parameters, responses):
-        path_info = self._paths.setdefault(url_template, {})
-        path_info[method] = {'description': description,
-                             'responses': {'default': {'description': ''}}}
-        if parameters:
-            path_info[method]['parameters'] = copy.deepcopy(parameters)
-        if responses:
-            path_info[method]['responses'] = copy.deepcopy(responses)

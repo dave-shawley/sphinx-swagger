@@ -1,10 +1,8 @@
-from __future__ import print_function
-
 import docutils.io
 
 from sphinx import builders
 
-from . import writer
+from . import document, writer
 
 
 class SwaggerBuilder(builders.Builder):
@@ -17,7 +15,7 @@ class SwaggerBuilder(builders.Builder):
 
     def prepare_writing(self, docnames):
         """Called before :meth:`write_doc`"""
-        self.swagger = writer.SwaggerDocument()
+        self.swagger = document.SwaggerDocument()
         self.writer = writer.SwaggerWriter(swagger_document=self.swagger)
 
     def write_doc(self, docname, doctree):
