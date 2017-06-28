@@ -42,4 +42,9 @@ setuptools.setup(
         'Programming Language :: Python :: 3.4',
         'Framework :: Sphinx :: Extension',
     ],
+    entry_points={
+        'distutils.commands': [
+            'swagger = sphinxswagger.command:BuildSwagger',
+        ],
+    },
 )
