@@ -9,6 +9,24 @@ from sphinxswagger import document
 URI_TEMPLATE_RE = re.compile(r'\(\?P<([^>]*)>.*\)')
 
 
+def _find_param_separator(tokens):
+    """
+    Return the index of the param separator.
+
+    :param list tokens: list of tokens on the parameter line
+    :returns: integer index of the separator or :data:`None` if no
+        separator is found
+    :rtype: int
+
+    Different versions of sphinxcontrib-httpdomain/autotornado use different
+    renderings for HTTP parameters.  For example ``name (type) -- text``
+    where the ``--`` might be a single hyphen or the unicode em-dash...
+
+    """
+    idx = [i for i, v in enumerate(tokens) if v in ('\u2013', '--', '-')]
+    return idx[0] if idx else None
+
+
 def write_swagger_file(app, exception):
     """
     :param sphinx.application.Sphinx app:
@@ -179,11 +197,16 @@ class EndpointVisitor(nodes.SparseNodeVisitor):
                                            {'in': 'path', 'required': True})
                 value_node.walkabout(visitor)
                 self.endpoint.parameters.extend(visitor.parameters)
+            elif name == 'Query Parameters':
+                visitor = ParameterVisitor(self.document, {'in': 'query'})
+                value_node.walkabout(visitor)
+                self.endpoint.parameters.extend(visitor.parameters)
             elif name == 'Request JSON Object':
                 visitor = ParameterVisitor(self.document)
                 value_node.walkabout(visitor)
                 self.endpoint.parameters.append({
                     'name': 'request-body', 'in': 'body', 'required': True,
+                    'description': 'A serialized request body',
                     'schema': visitor.get_schema()})
             elif name == 'Request JSON Array of Objects':
                 visitor = ParameterVisitor(self.document)
@@ -234,14 +257,14 @@ class ParameterVisitor(nodes.SparseNodeVisitor):
             'float': 'number',
             'object': 'object',
             'dict': 'object',
+            'bool': 'boolean',
         }
 
         visitor = ParagraphVisitor(self.document)
         node[0].walkabout(visitor)
         tokens = visitor.get_paragraph().split()
 
-        # name (type) -- description
-        idx = tokens.index('--')
+        idx = _find_param_separator(tokens)
         try:
             s, e = tokens.index('(', 0, idx), tokens.index(')', 0, idx)
             name = ' '.join(tokens[:s])
@@ -282,7 +305,7 @@ class StatusVisitor(nodes.SparseNodeVisitor):
             tokens[1] = '[' + tokens[1]
         else:
             code = tokens[0]
-        idx = tokens.index('--')
+        idx = _find_param_separator(tokens)
         reason = ' '.join(tokens[1:idx])
         description = ' '.join(tokens[idx+1:])
         self.status_info[code] = {'reason': reason, 'description': description}
