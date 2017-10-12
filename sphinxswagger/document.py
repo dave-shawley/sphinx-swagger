@@ -93,7 +93,7 @@ class SwaggerEndpoint(object):
                 except (KeyError, TypeError, ValueError):
                     info['reason'] = 'Unknown'
 
-            tokens = info['description'].split(maxsplit=2)
+            tokens = info['description'].split(' ', 2)
             if tokens:
                 tokens[0] = tokens[0].title()
             swagger_rsp['description'] = '{}\n\n{}'.format(
